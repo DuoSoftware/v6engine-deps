@@ -331,6 +331,48 @@ func (b *Bucket) GetBulk(keys []string) (map[string]*gomemcached.MCResponse, err
 	return rv, <-eout
 }
 
+func (b *Bucket) GetBulkRaw(keys []string) (map[string][]byte, error) {
+
+	ch, eout := b.getBulk(keys)
+
+	rv := make(map[string][]byte, len(keys))
+	for m := range ch {
+		for k, mcResponse := range m {
+			rv[k] = mcResponse.Body
+		}
+	}
+
+	return rv, <-eout
+
+}
+
+func (b *Bucket) getBulk(keys []string) (<-chan map[string]*gomemcached.MCResponse, <-chan error) {
+
+	// Organize by vbucket
+	kdm := map[uint16][]string{}
+	for _, k := range keys {
+		vb := uint16(b.VBHash(k))
+		a, ok := kdm[vb]
+		if !ok {
+			a = []string{}
+		}
+		kdm[vb] = append(a, k)
+	}
+
+	eout := make(chan error, 2)
+
+	// processBulkGet will own both of these channels and
+	// guarantee they're closed before it returns.
+	ch := make(chan map[string]*gomemcached.MCResponse)
+	ech := make(chan error)
+	go b.processBulkGet(kdm, ch, ech)
+
+	go errorCollector(ech, eout)
+
+	return ch, eout
+
+}
+
 // WriteOptions is the set of option flags availble for the Write
 // method.  They are ORed together to specify the desired request.
 type WriteOptions int
