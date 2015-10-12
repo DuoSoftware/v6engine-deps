@@ -11,14 +11,15 @@ import (
 type xlsxWorksheet struct {
 	XMLName       xml.Name          `xml:"http://schemas.openxmlformats.org/spreadsheetml/2006/main worksheet"`
 	SheetPr       xlsxSheetPr       `xml:"sheetPr"`
+	Dimension     xlsxDimension     `xml:"dimension"`
 	SheetViews    xlsxSheetViews    `xml:"sheetViews"`
 	SheetFormatPr xlsxSheetFormatPr `xml:"sheetFormatPr"`
-	Dimension     xlsxDimension     `xml:"dimension"`
 	Cols          xlsxCols          `xml:"cols"`
+	SheetData     xlsxSheetData     `xml:"sheetData"`
+	MergeCells    *xlsxMergeCells   `xml:"mergeCells,omitempty"`
 	PrintOptions  xlsxPrintOptions  `xml:"printOptions"`
 	PageMargins   xlsxPageMargins   `xml:"pageMargins"`
 	PageSetUp     xlsxPageSetUp     `xml:"pageSetup"`
-	SheetData     xlsxSheetData     `xml:"sheetData"`
 	HeaderFooter  xlsxHeaderFooter  `xml:"headerFooter"`
 }
 
@@ -101,6 +102,7 @@ type xlsxPageMargins struct {
 // currently I have not checked it for completeness - it does as much
 // as I need.
 type xlsxSheetFormatPr struct {
+	DefaultColWidth  float64 `xml:"defaultColWidth,attr,omitempty"`
 	DefaultRowHeight float64 `xml:"defaultRowHeight,attr"`
 }
 
@@ -134,6 +136,7 @@ type xlsxSheetView struct {
 	ZoomScalePageLayoutView float64         `xml:"zoomScalePageLayoutView,attr"`
 	WorkbookViewId          int             `xml:"workbookViewId,attr"`
 	Selection               []xlsxSelection `xml:"selection"`
+	Pane                    *xlsxPane       `xml:"pane"`
 }
 
 // xlsxSelection directly maps the selection element in the namespace
@@ -145,6 +148,18 @@ type xlsxSelection struct {
 	ActiveCell   string `xml:"activeCell,attr"`
 	ActiveCellId int    `xml:"activeCellId,attr"`
 	SQRef        string `xml:"sqref,attr"`
+}
+
+// xlsxSelection directly maps the selection element in the namespace
+// http://schemas.openxmlformats.org/spreadsheetml/2006/main -
+// currently I have not checked it for completeness - it does as much
+// as I need.
+type xlsxPane struct {
+	XSplit      float64 `xml:"xSplit,attr"`
+	YSplit      float64 `xml:"ySplit,attr"`
+	TopLeftCell string  `xml:"topLeftCell,attr"`
+	ActivePane  string  `xml:"activePane,attr"`
+	State       string  `xml:"state,attr"` // Either "split" or "frozen"
 }
 
 // xlsxSheetPr directly maps the sheetPr element in the namespace
@@ -177,12 +192,13 @@ type xlsxCols struct {
 // currently I have not checked it for completeness - it does as much
 // as I need.
 type xlsxCol struct {
-	Collapsed bool `xml:"collapsed,attr"`
-	Hidden    bool `xml:"hidden,attr"`
-	Max       int  `xml:"max,attr"`
-	Min       int  `xml:"min,attr"`
-	// Style     int     `xml:"style,attr"`
-	Width float64 `xml:"width,attr"`
+	Collapsed   bool    `xml:"collapsed,attr"`
+	Hidden      bool    `xml:"hidden,attr"`
+	Max         int     `xml:"max,attr"`
+	Min         int     `xml:"min,attr"`
+	Style       int     `xml:"style,attr"`
+	Width       float64 `xml:"width,attr"`
+	CustomWidth int     `xml:"customWidth,attr,omitempty"`
 }
 
 // xlsxDimension directly maps the dimension element in the namespace
@@ -207,10 +223,22 @@ type xlsxSheetData struct {
 // currently I have not checked it for completeness - it does as much
 // as I need.
 type xlsxRow struct {
-	R      int     `xml:"r,attr"`
-	Spans  string  `xml:"spans,attr,omitempty"`
-	Hidden bool    `xml:"hidden,attr,omitempty"`
-	C      []xlsxC `xml:"c"`
+	R            int     `xml:"r,attr"`
+	Spans        string  `xml:"spans,attr,omitempty"`
+	Hidden       bool    `xml:"hidden,attr,omitempty"`
+	C            []xlsxC `xml:"c"`
+	Ht           string  `xml:"ht,attr,omitempty"`
+	CustomHeight bool    `xml:"customHeight,attr,omitempty"`
+}
+
+type xlsxMergeCell struct {
+	Ref string `xml:"ref,attr"` // ref: horiz "A1:C1", vert "B3:B6", both  "D3:G4"
+}
+
+type xlsxMergeCells struct {
+	XMLName xml.Name        //`xml:"mergeCells,omitempty"`
+	Count   int             `xml:"count,attr,omitempty"`
+	Cells   []xlsxMergeCell `xml:"mergeCell,omitempty"`
 }
 
 // xlsxC directly maps the c element in the namespace
@@ -218,10 +246,22 @@ type xlsxRow struct {
 // currently I have not checked it for completeness - it does as much
 // as I need.
 type xlsxC struct {
-	R string `xml:"r,attr"` // Cell ID, e.g. A1
-	S int    `xml:"s,attr"` // Style reference.
-	T string `xml:"t,attr"` // Type.
-	V string `xml:"v"`      // Value
+	R string `xml:"r,attr"`           // Cell ID, e.g. A1
+	S int    `xml:"s,attr,omitempty"` // Style reference.
+	T string `xml:"t,attr,omitempty"` // Type.
+	V string `xml:"v,omitempty"`      // Value
+	F *xlsxF `xml:"f,omitempty"`      // Formula
+}
+
+// xlsxC directly maps the f element in the namespace
+// http://schemas.openxmlformats.org/sprceadsheetml/2006/main -
+// currently I have not checked it for completeness - it does as much
+// as I need.
+type xlsxF struct {
+	Content string `xml:",chardata"`
+	T       string `xml:"t,attr,omitempty"`   // Formula type
+	Ref     string `xml:"ref,attr,omitempty"` // Shared formula ref
+	Si      int    `xml:"si,attr,omitempty"`  // Shared formula index
 }
 
 // Create a new XLSX Worksheet with default values populated.
@@ -242,7 +282,7 @@ func newXlsxWorksheet() (worksheet *xlsxWorksheet) {
 		ShowOutlineSymbols:      true,
 		ShowRowColHeaders:       true,
 		ShowZeros:               true,
-		TabSelected:             true,
+		TabSelected:             false,
 		TopLeftCell:             "A1",
 		View:                    "normal",
 		WindowProtection:        false,
@@ -286,5 +326,6 @@ func newXlsxWorksheet() (worksheet *xlsxWorksheet) {
 	worksheet.HeaderFooter.OddHeader[0] = xlsxOddHeader{Content: `&C&"Times New Roman,Regular"&12&A`}
 	worksheet.HeaderFooter.OddFooter = make([]xlsxOddFooter, 1)
 	worksheet.HeaderFooter.OddFooter[0] = xlsxOddFooter{Content: `&C&"Times New Roman,Regular"&12Page &P`}
+
 	return
 }

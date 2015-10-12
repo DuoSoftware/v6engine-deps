@@ -31,6 +31,12 @@ func (l *FileSuite) TestOpenFileWithoutStyleAndSharedStrings(c *C) {
 	c.Assert(xlsxFile, NotNil)
 }
 
+func (l *FileSuite) TestOpenFileWithChartsheet(c *C) {
+	xlsxFile, error := OpenFile("./testdocs/testchartsheet.xlsx")
+	c.Assert(error, IsNil)
+	c.Assert(xlsxFile, NotNil)
+}
+
 // Test that we can correctly extract a reference table from the
 // sharedStrings.xml file embedded in the XLSX file and return a
 // reference table of string values from it.
@@ -144,7 +150,7 @@ func (l *FileSuite) TestReadWorkbookRelationsFromZipFile(c *C) {
 func (l *FileSuite) TestGetStyleFromZipFile(c *C) {
 	var xlsxFile *File
 	var err error
-	var style Style
+	var style *Style
 
 	xlsxFile, err = OpenFile("./testdocs/testfile.xlsx")
 	c.Assert(err, IsNil)
@@ -250,10 +256,11 @@ func (l *FileSuite) TestMarshalWorkbook(c *C) {
 		State:   "visible"}
 
 	expectedWorkbook := `<?xml version="1.0" encoding="UTF-8"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fileVersion appName="Go XLSX"></fileVersion><workbookPr showObjects="all" date1904="false"></workbookPr><workbookProtection></workbookProtection><bookViews><workbookView showHorizontalScroll="true" showVerticalScroll="true" showSheetTabs="true" tabRatio="204" windowHeight="8192" windowWidth="16384" xWindow="0" yWindow="0"></workbookView></bookViews><sheets><sheet name="MyFirstSheet" sheetId="1" xmlns:relationships="http://schemas.openxmlformats.org/officeDocument/2006/relationships" relationships:id="rId1" state="visible"></sheet><sheet name="MySecondSheet" sheetId="2" xmlns:relationships="http://schemas.openxmlformats.org/officeDocument/2006/relationships" relationships:id="rId2" state="visible"></sheet></sheets><definedNames></definedNames><calcPr iterateCount="100" refMode="A1" iterateDelta="0.001"></calcPr></workbook>`
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><fileVersion appName="Go XLSX"></fileVersion><workbookPr showObjects="all" date1904="false"></workbookPr><workbookProtection></workbookProtection><bookViews><workbookView showHorizontalScroll="true" showVerticalScroll="true" showSheetTabs="true" tabRatio="204" windowHeight="8192" windowWidth="16384" xWindow="0" yWindow="0"></workbookView></bookViews><sheets><sheet name="MyFirstSheet" sheetId="1" r:id="rId1" state="visible"></sheet><sheet name="MySecondSheet" sheetId="2" r:id="rId2" state="visible"></sheet></sheets><definedNames></definedNames><calcPr iterateCount="100" refMode="A1" iterateDelta="0.001"></calcPr></workbook>`
 	output, err := xml.Marshal(workbook)
 	c.Assert(err, IsNil)
-	stringOutput := xml.Header + string(output)
+	outputStr := replaceRelationshipsNameSpace(string(output))
+	stringOutput := xml.Header + outputStr
 	c.Assert(stringOutput, Equals, expectedWorkbook)
 }
 
@@ -264,22 +271,22 @@ func (l *FileSuite) TestMarshalFile(c *C) {
 	sheet1 := f.AddSheet("MySheet")
 	row1 := sheet1.AddRow()
 	cell1 := row1.AddCell()
-	cell1.Value = "A cell!"
+	cell1.SetString("A cell!")
 	sheet2 := f.AddSheet("AnotherSheet")
 	row2 := sheet2.AddRow()
 	cell2 := row2.AddCell()
-	cell2.Value = "A cell!"
+	cell2.SetString("A cell!")
 	parts, err := f.MarshallParts()
 	c.Assert(err, IsNil)
 	c.Assert(len(parts), Equals, 11)
 
 	// sheets
 	expectedSheet1 := `<?xml version="1.0" encoding="UTF-8"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr filterMode="false"><pageSetUpPr fitToPage="false"></pageSetUpPr></sheetPr><sheetViews><sheetView windowProtection="false" showFormulas="false" showGridLines="true" showRowColHeaders="true" showZeros="true" rightToLeft="false" tabSelected="true" showOutlineSymbols="true" defaultGridColor="true" view="normal" topLeftCell="A1" colorId="64" zoomScale="100" zoomScaleNormal="100" zoomScalePageLayoutView="100" workbookViewId="0"><selection pane="topLeft" activeCell="A1" activeCellId="0" sqref="A1"></selection></sheetView></sheetViews><sheetFormatPr defaultRowHeight="12.85"></sheetFormatPr><dimension ref="A1"></dimension><cols><col collapsed="false" hidden="false" max="1" min="1" width="9.5"></col></cols><printOptions headings="false" gridLines="false" gridLinesSet="true" horizontalCentered="false" verticalCentered="false"></printOptions><pageMargins left="0.7875" right="0.7875" top="1.05277777777778" bottom="1.05277777777778" header="0.7875" footer="0.7875"></pageMargins><pageSetup paperSize="9" scale="100" firstPageNumber="1" fitToWidth="1" fitToHeight="1" pageOrder="downThenOver" orientation="portrait" usePrinterDefaults="false" blackAndWhite="false" draft="false" cellComments="none" useFirstPageNumber="true" horizontalDpi="300" verticalDpi="300" copies="1"></pageSetup><sheetData><row r="1"><c r="A1" s="0" t="s"><v>0</v></c></row></sheetData><headerFooter differentFirst="false" differentOddEven="false"><oddHeader>&amp;C&amp;&#34;Times New Roman,Regular&#34;&amp;12&amp;A</oddHeader><oddFooter>&amp;C&amp;&#34;Times New Roman,Regular&#34;&amp;12Page &amp;P</oddFooter></headerFooter></worksheet>`
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr filterMode="false"><pageSetUpPr fitToPage="false"></pageSetUpPr></sheetPr><dimension ref="A1"></dimension><sheetViews><sheetView windowProtection="false" showFormulas="false" showGridLines="true" showRowColHeaders="true" showZeros="true" rightToLeft="false" tabSelected="true" showOutlineSymbols="true" defaultGridColor="true" view="normal" topLeftCell="A1" colorId="64" zoomScale="100" zoomScaleNormal="100" zoomScalePageLayoutView="100" workbookViewId="0"><selection pane="topLeft" activeCell="A1" activeCellId="0" sqref="A1"></selection></sheetView></sheetViews><sheetFormatPr defaultRowHeight="12.85"></sheetFormatPr><cols><col collapsed="false" hidden="false" max="1" min="1" style="0" width="9.5"></col></cols><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData><printOptions headings="false" gridLines="false" gridLinesSet="true" horizontalCentered="false" verticalCentered="false"></printOptions><pageMargins left="0.7875" right="0.7875" top="1.05277777777778" bottom="1.05277777777778" header="0.7875" footer="0.7875"></pageMargins><pageSetup paperSize="9" scale="100" firstPageNumber="1" fitToWidth="1" fitToHeight="1" pageOrder="downThenOver" orientation="portrait" usePrinterDefaults="false" blackAndWhite="false" draft="false" cellComments="none" useFirstPageNumber="true" horizontalDpi="300" verticalDpi="300" copies="1"></pageSetup><headerFooter differentFirst="false" differentOddEven="false"><oddHeader>&amp;C&amp;&#34;Times New Roman,Regular&#34;&amp;12&amp;A</oddHeader><oddFooter>&amp;C&amp;&#34;Times New Roman,Regular&#34;&amp;12Page &amp;P</oddFooter></headerFooter></worksheet>`
 	c.Assert(parts["xl/worksheets/sheet1.xml"], Equals, expectedSheet1)
 
 	expectedSheet2 := `<?xml version="1.0" encoding="UTF-8"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr filterMode="false"><pageSetUpPr fitToPage="false"></pageSetUpPr></sheetPr><sheetViews><sheetView windowProtection="false" showFormulas="false" showGridLines="true" showRowColHeaders="true" showZeros="true" rightToLeft="false" tabSelected="true" showOutlineSymbols="true" defaultGridColor="true" view="normal" topLeftCell="A1" colorId="64" zoomScale="100" zoomScaleNormal="100" zoomScalePageLayoutView="100" workbookViewId="0"><selection pane="topLeft" activeCell="A1" activeCellId="0" sqref="A1"></selection></sheetView></sheetViews><sheetFormatPr defaultRowHeight="12.85"></sheetFormatPr><dimension ref="A1"></dimension><cols><col collapsed="false" hidden="false" max="1" min="1" width="9.5"></col></cols><printOptions headings="false" gridLines="false" gridLinesSet="true" horizontalCentered="false" verticalCentered="false"></printOptions><pageMargins left="0.7875" right="0.7875" top="1.05277777777778" bottom="1.05277777777778" header="0.7875" footer="0.7875"></pageMargins><pageSetup paperSize="9" scale="100" firstPageNumber="1" fitToWidth="1" fitToHeight="1" pageOrder="downThenOver" orientation="portrait" usePrinterDefaults="false" blackAndWhite="false" draft="false" cellComments="none" useFirstPageNumber="true" horizontalDpi="300" verticalDpi="300" copies="1"></pageSetup><sheetData><row r="1"><c r="A1" s="0" t="s"><v>0</v></c></row></sheetData><headerFooter differentFirst="false" differentOddEven="false"><oddHeader>&amp;C&amp;&#34;Times New Roman,Regular&#34;&amp;12&amp;A</oddHeader><oddFooter>&amp;C&amp;&#34;Times New Roman,Regular&#34;&amp;12Page &amp;P</oddFooter></headerFooter></worksheet>`
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetPr filterMode="false"><pageSetUpPr fitToPage="false"></pageSetUpPr></sheetPr><dimension ref="A1"></dimension><sheetViews><sheetView windowProtection="false" showFormulas="false" showGridLines="true" showRowColHeaders="true" showZeros="true" rightToLeft="false" tabSelected="false" showOutlineSymbols="true" defaultGridColor="true" view="normal" topLeftCell="A1" colorId="64" zoomScale="100" zoomScaleNormal="100" zoomScalePageLayoutView="100" workbookViewId="0"><selection pane="topLeft" activeCell="A1" activeCellId="0" sqref="A1"></selection></sheetView></sheetViews><sheetFormatPr defaultRowHeight="12.85"></sheetFormatPr><cols><col collapsed="false" hidden="false" max="1" min="1" style="0" width="9.5"></col></cols><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData><printOptions headings="false" gridLines="false" gridLinesSet="true" horizontalCentered="false" verticalCentered="false"></printOptions><pageMargins left="0.7875" right="0.7875" top="1.05277777777778" bottom="1.05277777777778" header="0.7875" footer="0.7875"></pageMargins><pageSetup paperSize="9" scale="100" firstPageNumber="1" fitToWidth="1" fitToHeight="1" pageOrder="downThenOver" orientation="portrait" usePrinterDefaults="false" blackAndWhite="false" draft="false" cellComments="none" useFirstPageNumber="true" horizontalDpi="300" verticalDpi="300" copies="1"></pageSetup><headerFooter differentFirst="false" differentOddEven="false"><oddHeader>&amp;C&amp;&#34;Times New Roman,Regular&#34;&amp;12&amp;A</oddHeader><oddFooter>&amp;C&amp;&#34;Times New Roman,Regular&#34;&amp;12Page &amp;P</oddFooter></headerFooter></worksheet>`
 	c.Assert(parts["xl/worksheets/sheet2.xml"], Equals, expectedSheet2)
 
 	// .rels.xml
@@ -636,13 +643,16 @@ func (l *FileSuite) TestMarshalFile(c *C) {
 	c.Assert(parts["xl/_rels/workbook.xml.rels"], Equals, expectedXLSXWorkbookRels)
 
 	// workbook.xml
+	// Note that the following XML snippet is just pasted in here to correspond to the hack
+	// added in file.go to support Apple Numbers so the test passes.
+	// `xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`
 	expectedWorkbook := `<?xml version="1.0" encoding="UTF-8"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fileVersion appName="Go XLSX"></fileVersion><workbookPr showObjects="all" date1904="false"></workbookPr><workbookProtection></workbookProtection><bookViews><workbookView showHorizontalScroll="true" showVerticalScroll="true" showSheetTabs="true" tabRatio="204" windowHeight="8192" windowWidth="16384" xWindow="0" yWindow="0"></workbookView></bookViews><sheets><sheet name="MySheet" sheetId="1" xmlns:relationships="http://schemas.openxmlformats.org/officeDocument/2006/relationships" relationships:id="rId1" state="visible"></sheet><sheet name="AnotherSheet" sheetId="2" xmlns:relationships="http://schemas.openxmlformats.org/officeDocument/2006/relationships" relationships:id="rId2" state="visible"></sheet></sheets><definedNames></definedNames><calcPr iterateCount="100" refMode="A1" iterateDelta="0.001"></calcPr></workbook>`
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><fileVersion appName="Go XLSX"></fileVersion><workbookPr showObjects="all" date1904="false"></workbookPr><workbookProtection></workbookProtection><bookViews><workbookView showHorizontalScroll="true" showVerticalScroll="true" showSheetTabs="true" tabRatio="204" windowHeight="8192" windowWidth="16384" xWindow="0" yWindow="0"></workbookView></bookViews><sheets><sheet name="MySheet" sheetId="1" r:id="rId1" state="visible"></sheet><sheet name="AnotherSheet" sheetId="2" r:id="rId2" state="visible"></sheet></sheets><definedNames></definedNames><calcPr iterateCount="100" refMode="A1" iterateDelta="0.001"></calcPr></workbook>`
 	c.Assert(parts["xl/workbook.xml"], Equals, expectedWorkbook)
 
 	// [Content_Types].xml
 	expectedContentTypes := `<?xml version="1.0" encoding="UTF-8"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/_rels/.rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"></Override><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"></Override><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"></Override><Override PartName="/xl/_rels/workbook.xml.rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"></Override><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"></Override><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"></Override><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"></Override><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"></Override><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"></Override><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"></Default><Default Extension="xml" ContentType="application/xml"></Default></Types>`
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/_rels/.rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"></Override><Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"></Override><Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"></Override><Override PartName="/xl/_rels/workbook.xml.rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"></Override><Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"></Override><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"></Override><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"></Override><Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"></Override><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"></Override><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"></Override><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"></Default><Default Extension="xml" ContentType="application/xml"></Default></Types>`
 	c.Assert(parts["[Content_Types].xml"], Equals, expectedContentTypes)
 
 	// styles.xml
@@ -650,7 +660,7 @@ func (l *FileSuite) TestMarshalFile(c *C) {
 	// For now we only allow simple string data in the
 	// spreadsheet.  Style support will follow.
 	expectedStyles := `<?xml version="1.0" encoding="UTF-8"?>
-<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="12"/><name val="Verdana"/><family val="0"/><charset val="0"/></font></fonts><cellStyleXfs count="1"><xf applyAlignment="0" applyBorder="0" applyFont="0" applyFill="0" applyProtection="0" borderId="0" fillId="0" fontId="0" numFmtId="0"><alignment horizontal="" indent="0" shrinkToFit="0" textRotation="0" vertical="" wrapText="0"/></xf></cellStyleXfs><cellXfs count="1"><xf applyAlignment="0" applyBorder="0" applyFont="0" applyFill="0" applyProtection="0" borderId="0" fillId="0" fontId="0" numFmtId="0"><alignment horizontal="" indent="0" shrinkToFit="0" textRotation="0" vertical="" wrapText="0"/></xf></cellXfs></styleSheet>`
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="12"/><name val="Verdana"/><family val="0"/><charset val="0"/></font></fonts><fills count="2"><fill><patternFill patternType="none"><fgColor rgb="FFFFFFFF"/><bgColor rgb="00000000"/></patternFill></fill><fill><patternFill patternType="lightGray"/></fill></fills><borders count="1"><border><left style="none"></left><right style="none"></right><top style="none"></top><bottom style="none"></bottom></border></borders><cellStyleXfs count="1"><xf applyAlignment="0" applyBorder="0" applyFont="0" applyFill="0" applyNumberFormat="0" applyProtection="0" borderId="0" fillId="0" fontId="0" numFmtId="0"><alignment horizontal="" indent="0" shrinkToFit="0" textRotation="0" vertical="" wrapText="0"/></xf></cellStyleXfs><cellXfs count="1"><xf applyAlignment="0" applyBorder="0" applyFont="0" applyFill="0" applyNumberFormat="0" applyProtection="0" borderId="0" fillId="0" fontId="0" numFmtId="0"><alignment horizontal="" indent="0" shrinkToFit="0" textRotation="0" vertical="" wrapText="0"/></xf></cellXfs></styleSheet>`
 	c.Assert(parts["xl/styles.xml"], Equals, expectedStyles)
 }
 
@@ -714,4 +724,71 @@ func fileToSliceCheckOutput(c *C, output [][][]string) {
 	c.Assert(output[0][1][1], Equals, "Quuk")
 	c.Assert(len(output[1]), Equals, 0)
 	c.Assert(len(output[2]), Equals, 0)
+}
+
+func (l *FileSuite) TestReadWorkbookWithTypes(c *C) {
+	var xlsxFile *File
+	var err error
+
+	xlsxFile, err = OpenFile("./testdocs/testcelltypes.xlsx")
+	c.Assert(err, IsNil)
+	c.Assert(len(xlsxFile.Sheets), Equals, 1)
+	sheet := xlsxFile.Sheet["Sheet1"]
+	c.Assert(len(sheet.Rows), Equals, 8)
+	c.Assert(len(sheet.Rows[0].Cells), Equals, 2)
+
+	// string 1
+	c.Assert(sheet.Rows[0].Cells[0].Type(), Equals, CellTypeString)
+	c.Assert(sheet.Rows[0].Cells[0].String(), Equals, "hello world")
+
+	// string 2
+	c.Assert(sheet.Rows[1].Cells[0].Type(), Equals, CellTypeString)
+	c.Assert(sheet.Rows[1].Cells[0].String(), Equals, "日本語")
+
+	// integer
+	c.Assert(sheet.Rows[2].Cells[0].Type(), Equals, CellTypeNumeric)
+	intValue, _ := sheet.Rows[2].Cells[0].Int()
+	c.Assert(intValue, Equals, 12345)
+
+	// float
+	c.Assert(sheet.Rows[3].Cells[0].Type(), Equals, CellTypeNumeric)
+	floatValue, _ := sheet.Rows[3].Cells[0].Float()
+	c.Assert(floatValue, Equals, 1.024)
+
+	// Now it can't detect date
+	c.Assert(sheet.Rows[4].Cells[0].Type(), Equals, CellTypeNumeric)
+	intValue, _ = sheet.Rows[4].Cells[0].Int()
+	c.Assert(intValue, Equals, 40543)
+
+	// bool
+	c.Assert(sheet.Rows[5].Cells[0].Type(), Equals, CellTypeBool)
+	c.Assert(sheet.Rows[5].Cells[0].Bool(), Equals, true)
+
+	// formula
+	c.Assert(sheet.Rows[6].Cells[0].Type(), Equals, CellTypeFormula)
+	c.Assert(sheet.Rows[6].Cells[0].Formula(), Equals, "10+20")
+	c.Assert(sheet.Rows[6].Cells[0].Value, Equals, "30")
+
+	// error
+	c.Assert(sheet.Rows[7].Cells[0].Type(), Equals, CellTypeError)
+	c.Assert(sheet.Rows[7].Cells[0].Formula(), Equals, "10/0")
+	c.Assert(sheet.Rows[7].Cells[0].Value, Equals, "#DIV/0!")
+}
+
+func (s *SliceReaderSuite) TestFileWithEmptyRows(c *C) {
+	f, err := OpenFile("./testdocs/empty_rows.xlsx")
+	c.Assert(err, IsNil)
+	sheet, ok := f.Sheet["EmptyRows"]
+	c.Assert(ok, Equals, true)
+	c.Assert(sheet.Cell(0, 0).String(), Equals, "")
+	c.Assert(sheet.Cell(2, 0).String(), Equals, "A3")
+}
+
+func (s *SliceReaderSuite) TestFileWithEmptyCols(c *C) {
+	f, err := OpenFile("./testdocs/empty_rows.xlsx")
+	c.Assert(err, IsNil)
+	sheet, ok := f.Sheet["EmptyCols"]
+	c.Assert(ok, Equals, true)
+	c.Assert(sheet.Cell(0, 0).String(), Equals, "")
+	c.Assert(sheet.Cell(0, 2).String(), Equals, "C1")
 }

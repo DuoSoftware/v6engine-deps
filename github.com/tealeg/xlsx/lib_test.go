@@ -13,6 +13,20 @@ type LibSuite struct{}
 
 var _ = Suite(&LibSuite{})
 
+// Attempting to open a file without workbook.xml.rels returns an error.
+func (l *LibSuite) TestReadZipReaderWithFileWithNoWorkbookRels(c *C) {
+	_, err := OpenFile("./testdocs/badfile_noWorkbookRels.xlsx")
+	c.Assert(err, NotNil)
+	c.Assert(err.Error(), Equals, "xl/_rels/workbook.xml.rels not found in input xlsx.")
+}
+
+// Attempting to open a file with no worksheets returns an error.
+func (l *LibSuite) TestReadZipReaderWithFileWithNoWorksheets(c *C) {
+	_, err := OpenFile("./testdocs/badfile_noWorksheets.xlsx")
+	c.Assert(err, NotNil)
+	c.Assert(err.Error(), Equals, "Input xlsx contains no worksheets.")
+}
+
 // which they are contained from the XLSX file, even when the
 // worksheet files have arbitrary, non-numeric names.
 func (l *LibSuite) TestReadWorkbookRelationsFromZipFileWithFunnyNames(c *C) {
@@ -225,18 +239,23 @@ func (l *LibSuite) TestMakeRowFromSpan(c *C) {
 	var rangeString string
 	var row *Row
 	var length int
+	var sheet *Sheet
+	sheet = new(Sheet)
 	rangeString = "1:3"
-	row = makeRowFromSpan(rangeString)
+	row = makeRowFromSpan(rangeString, sheet)
 	length = len(row.Cells)
 	c.Assert(length, Equals, 3)
+	c.Assert(row.Sheet, Equals, sheet)
 	rangeString = "5:7" // Note - we ignore lower bound!
-	row = makeRowFromSpan(rangeString)
+	row = makeRowFromSpan(rangeString, sheet)
 	length = len(row.Cells)
 	c.Assert(length, Equals, 7)
+	c.Assert(row.Sheet, Equals, sheet)
 	rangeString = "1:1"
-	row = makeRowFromSpan(rangeString)
+	row = makeRowFromSpan(rangeString, sheet)
 	length = len(row.Cells)
 	c.Assert(length, Equals, 1)
+	c.Assert(row.Sheet, Equals, sheet)
 }
 
 func (l *LibSuite) TestReadRowsFromSheet(c *C) {
@@ -264,6 +283,7 @@ func (l *LibSuite) TestReadRowsFromSheet(c *C) {
   <sheetViews>
     <sheetView tabSelected="1" workbookViewId="0">
       <selection activeCell="C2" sqref="C2"/>
+	  <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
     </sheetView>
   </sheetViews>
   <sheetFormatPr baseColWidth="10" defaultRowHeight="15"/>
@@ -299,10 +319,12 @@ func (l *LibSuite) TestReadRowsFromSheet(c *C) {
 	c.Assert(err, IsNil)
 	file := new(File)
 	file.referenceTable = MakeSharedStringRefTable(sst)
-	rows, cols, maxCols, maxRows := readRowsFromSheet(worksheet, file)
+	sheet := new(Sheet)
+	rows, cols, maxCols, maxRows := readRowsFromSheet(worksheet, file, sheet)
 	c.Assert(maxRows, Equals, 2)
 	c.Assert(maxCols, Equals, 2)
 	row := rows[0]
+	c.Assert(row.Sheet, Equals, sheet)
 	c.Assert(len(row.Cells), Equals, 2)
 	cell1 := row.Cells[0]
 	c.Assert(cell1.Value, Equals, "Foo")
@@ -312,6 +334,85 @@ func (l *LibSuite) TestReadRowsFromSheet(c *C) {
 	c.Assert(col.Min, Equals, 0)
 	c.Assert(col.Max, Equals, 0)
 	c.Assert(col.Hidden, Equals, false)
+	c.Assert(len(worksheet.SheetViews.SheetView), Equals, 1)
+	sheetView := worksheet.SheetViews.SheetView[0]
+	c.Assert(sheetView.Pane, NotNil)
+	pane := sheetView.Pane
+	c.Assert(pane.XSplit, Equals, 0.0)
+	c.Assert(pane.YSplit, Equals, 1.0)
+}
+
+// An invalid value in the "r" attribute in a <row> was causing a panic
+// in readRowsFromSheet. This test is a copy of TestReadRowsFromSheet,
+// with the important difference of the value 1048576 below in <row r="1048576", which is
+// higher than the number of rows in the sheet. That number itself isn't significant;
+// it just happens to be the value found to trigger the error in a user's file.
+func (l *LibSuite) TestReadRowsFromSheetBadR(c *C) {
+	var sharedstringsXML = bytes.NewBufferString(`
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="4" uniqueCount="4">
+  <si>
+    <t>Foo</t>
+  </si>
+  <si>
+    <t>Bar</t>
+  </si>
+  <si>
+    <t xml:space="preserve">Baz </t>
+  </si>
+  <si>
+    <t>Quuk</t>
+  </si>
+</sst>`)
+	var sheetxml = bytes.NewBufferString(`
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+           xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <dimension ref="A1:B2"/>
+  <sheetViews>
+    <sheetView tabSelected="1" workbookViewId="0">
+      <selection activeCell="C2" sqref="C2"/>
+	  <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
+    </sheetView>
+  </sheetViews>
+  <sheetFormatPr baseColWidth="10" defaultRowHeight="15"/>
+  <sheetData>
+    <row r="1" spans="1:2">
+      <c r="A1" t="s">
+        <v>0</v>
+      </c>
+      <c r="B1" t="s">
+        <v>1</v>
+      </c>
+    </row>
+    <row r="1048576" spans="1:2">
+      <c r="A2" t="s">
+        <v>2</v>
+      </c>
+      <c r="B2" t="s">
+        <v>3</v>
+      </c>
+    </row>
+  </sheetData>
+  <pageMargins left="0.7" right="0.7"
+               top="0.78740157499999996"
+               bottom="0.78740157499999996"
+               header="0.3"
+               footer="0.3"/>
+</worksheet>`)
+	worksheet := new(xlsxWorksheet)
+	err := xml.NewDecoder(sheetxml).Decode(worksheet)
+	c.Assert(err, IsNil)
+	sst := new(xlsxSST)
+	err = xml.NewDecoder(sharedstringsXML).Decode(sst)
+	c.Assert(err, IsNil)
+	file := new(File)
+	file.referenceTable = MakeSharedStringRefTable(sst)
+
+	sheet := new(Sheet)
+	// Discarding all return values; this test is a regression for
+	// a panic due to an "index out of range."
+	readRowsFromSheet(worksheet, file, sheet)
 }
 
 func (l *LibSuite) TestReadRowsFromSheetWithLeadingEmptyRows(c *C) {
@@ -356,9 +457,85 @@ func (l *LibSuite) TestReadRowsFromSheetWithLeadingEmptyRows(c *C) {
 
 	file := new(File)
 	file.referenceTable = MakeSharedStringRefTable(sst)
-	_, _, maxCols, maxRows := readRowsFromSheet(worksheet, file)
-	c.Assert(maxRows, Equals, 2)
+	sheet := new(Sheet)
+	rows, _, maxCols, maxRows := readRowsFromSheet(worksheet, file, sheet)
+	c.Assert(maxRows, Equals, 5)
 	c.Assert(maxCols, Equals, 1)
+
+	c.Assert(len(rows[0].Cells), Equals, 0)
+	c.Assert(len(rows[1].Cells), Equals, 0)
+	c.Assert(len(rows[2].Cells), Equals, 0)
+	c.Assert(len(rows[3].Cells), Equals, 1)
+	c.Assert(rows[3].Cells[0].String(), Equals, "ABC")
+	c.Assert(len(rows[4].Cells), Equals, 1)
+	c.Assert(rows[4].Cells[0].String(), Equals, "DEF")
+}
+
+func (l *LibSuite) TestReadRowsFromSheetWithLeadingEmptyCols(c *C) {
+	var sharedstringsXML = bytes.NewBufferString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2" uniqueCount="2"><si><t>ABC</t></si><si><t>DEF</t></si></sst>`)
+	var sheetxml = bytes.NewBufferString(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="x14ac" xmlns:x14ac="http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac">
+  <dimension ref="C1:D2"/>
+  <sheetViews>
+    <sheetView tabSelected="1" workbookViewId="0">
+      <selection activeCell="A2" sqref="A2"/>
+    </sheetView>
+  </sheetViews>
+  <sheetFormatPr baseColWidth="10" defaultRowHeight="15" x14ac:dyDescent="0"/>
+  <cols>
+  	<col min="3" max="3" width="17" customWidth="1"/>
+  	<col min="4" max="4" width="18" customWidth="1"/>
+  </cols>
+  <sheetData>
+    <row r="1" spans="3:4">
+      <c r="C1" t="s"><v>0</v></c>
+      <c r="D1" t="s"><v>1</v></c>
+    </row>
+    <row r="2" spans="3:4">
+      <c r="C2" t="s"><v>0</v></c>
+      <c r="D2" t="s"><v>1</v></c>
+    </row>
+  </sheetData>
+  <pageMargins left="0.75" right="0.75" top="1" bottom="1" header="0.5" footer="0.5"/>
+  <pageSetup paperSize="9" orientation="portrait" horizontalDpi="4294967292" verticalDpi="4294967292"/>
+  <extLst>
+    <ext uri="{64002731-A6B0-56B0-2670-7721B7C09600}" xmlns:mx="http://schemas.microsoft.com/office/mac/excel/2008/main">
+      <mx:PLV Mode="0" OnePage="0" WScale="0"/>
+    </ext>
+  </extLst>
+</worksheet>
+`)
+	worksheet := new(xlsxWorksheet)
+	err := xml.NewDecoder(sheetxml).Decode(worksheet)
+	c.Assert(err, IsNil)
+	sst := new(xlsxSST)
+	err = xml.NewDecoder(sharedstringsXML).Decode(sst)
+	c.Assert(err, IsNil)
+
+	file := new(File)
+	file.referenceTable = MakeSharedStringRefTable(sst)
+	sheet := new(Sheet)
+	rows, cols, maxCols, maxRows := readRowsFromSheet(worksheet, file, sheet)
+	c.Assert(maxRows, Equals, 2)
+	c.Assert(maxCols, Equals, 4)
+
+	c.Assert(len(rows[0].Cells), Equals, 4)
+	c.Assert(rows[0].Cells[0].String(), Equals, "")
+	c.Assert(rows[0].Cells[1].String(), Equals, "")
+	c.Assert(rows[0].Cells[2].String(), Equals, "ABC")
+	c.Assert(rows[0].Cells[3].String(), Equals, "DEF")
+	c.Assert(len(rows[1].Cells), Equals, 4)
+	c.Assert(rows[1].Cells[0].String(), Equals, "")
+	c.Assert(rows[1].Cells[1].String(), Equals, "")
+	c.Assert(rows[1].Cells[2].String(), Equals, "ABC")
+	c.Assert(rows[1].Cells[3].String(), Equals, "DEF")
+
+	c.Assert(len(cols), Equals, 4)
+	c.Assert(cols[0].Width, Equals, 0.0)
+	c.Assert(cols[1].Width, Equals, 0.0)
+	c.Assert(cols[2].Width, Equals, 17.0)
+	c.Assert(cols[3].Width, Equals, 18.0)
 }
 
 func (l *LibSuite) TestReadRowsFromSheetWithEmptyCells(c *C) {
@@ -445,11 +622,13 @@ func (l *LibSuite) TestReadRowsFromSheetWithEmptyCells(c *C) {
 	c.Assert(err, IsNil)
 	file := new(File)
 	file.referenceTable = MakeSharedStringRefTable(sst)
-	rows, cols, maxCols, maxRows := readRowsFromSheet(worksheet, file)
+	sheet := new(Sheet)
+	rows, cols, maxCols, maxRows := readRowsFromSheet(worksheet, file, sheet)
 	c.Assert(maxRows, Equals, 3)
 	c.Assert(maxCols, Equals, 3)
 
 	row := rows[2]
+	c.Assert(row.Sheet, Equals, sheet)
 	c.Assert(len(row.Cells), Equals, 3)
 
 	cell1 := row.Cells[0]
@@ -487,11 +666,13 @@ func (l *LibSuite) TestReadRowsFromSheetWithTrailingEmptyCells(c *C) {
 
 	file := new(File)
 	file.referenceTable = MakeSharedStringRefTable(sst)
-	rows, _, maxCol, maxRow := readRowsFromSheet(worksheet, file)
+	sheet := new(Sheet)
+	rows, _, maxCol, maxRow := readRowsFromSheet(worksheet, file, sheet)
 	c.Assert(maxCol, Equals, 4)
 	c.Assert(maxRow, Equals, 8)
 
 	row = rows[0]
+	c.Assert(row.Sheet, Equals, sheet)
 	c.Assert(len(row.Cells), Equals, 4)
 
 	cell1 = row.Cells[0]
@@ -507,6 +688,7 @@ func (l *LibSuite) TestReadRowsFromSheetWithTrailingEmptyCells(c *C) {
 	c.Assert(cell4.Value, Equals, "D")
 
 	row = rows[1]
+	c.Assert(row.Sheet, Equals, sheet)
 	c.Assert(len(row.Cells), Equals, 4)
 
 	cell1 = row.Cells[0]
@@ -594,10 +776,12 @@ func (l *LibSuite) TestReadRowsFromSheetWithMultipleSpans(c *C) {
 	c.Assert(err, IsNil)
 	file := new(File)
 	file.referenceTable = MakeSharedStringRefTable(sst)
-	rows, _, maxCols, maxRows := readRowsFromSheet(worksheet, file)
+	sheet := new(Sheet)
+	rows, _, maxCols, maxRows := readRowsFromSheet(worksheet, file, sheet)
 	c.Assert(maxRows, Equals, 2)
 	c.Assert(maxCols, Equals, 4)
 	row := rows[0]
+	c.Assert(row.Sheet, Equals, sheet)
 	c.Assert(len(row.Cells), Equals, 4)
 	cell1 := row.Cells[0]
 	c.Assert(cell1.Value, Equals, "Foo")
@@ -608,4 +792,279 @@ func (l *LibSuite) TestReadRowsFromSheetWithMultipleSpans(c *C) {
 	cell4 := row.Cells[3]
 	c.Assert(cell4.Value, Equals, "Bar")
 
+}
+
+func (l *LibSuite) TestReadRowsFromSheetWithMultipleTypes(c *C) {
+	var sharedstringsXML = bytes.NewBufferString(`
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="4" uniqueCount="4">
+  <si>
+    <t>Hello World</t>
+  </si>
+</sst>`)
+	var sheetxml = bytes.NewBufferString(`
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+           xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <dimension ref="A1:F1"/>
+  <sheetViews>
+    <sheetView tabSelected="1" workbookViewId="0">
+      <selection activeCell="C1" sqref="C1"/>
+    </sheetView>
+  </sheetViews>
+  <sheetFormatPr baseColWidth="10" defaultRowHeight="15"/>
+  <sheetData>
+    <row r="1" spans="1:6">
+      <c r="A1" t="s">
+        <v>0</v>
+      </c>
+      <c r="B1">
+        <v>12345</v>
+      </c>
+      <c r="C1">
+        <v>1.024</v>
+      </c>
+      <c r="D1" t="b">
+        <v>1</v>
+      </c>
+      <c r="E1">
+      	<f>10+20</f>
+        <v>30</v>
+      </c>
+      <c r="F1" t="e">
+      	<f>10/0</f>
+        <v>#DIV/0!</v>
+      </c>
+    </row>
+  </sheetData>
+  <pageMargins left="0.7" right="0.7"
+               top="0.78740157499999996"
+               bottom="0.78740157499999996"
+               header="0.3"
+               footer="0.3"/>
+</worksheet>`)
+	worksheet := new(xlsxWorksheet)
+	err := xml.NewDecoder(sheetxml).Decode(worksheet)
+	c.Assert(err, IsNil)
+	sst := new(xlsxSST)
+	err = xml.NewDecoder(sharedstringsXML).Decode(sst)
+	c.Assert(err, IsNil)
+	file := new(File)
+	file.referenceTable = MakeSharedStringRefTable(sst)
+	sheet := new(Sheet)
+	rows, _, maxCols, maxRows := readRowsFromSheet(worksheet, file, sheet)
+	c.Assert(maxRows, Equals, 1)
+	c.Assert(maxCols, Equals, 6)
+	row := rows[0]
+	c.Assert(row.Sheet, Equals, sheet)
+	c.Assert(len(row.Cells), Equals, 6)
+
+	cell1 := row.Cells[0]
+	c.Assert(cell1.Type(), Equals, CellTypeString)
+	c.Assert(cell1.String(), Equals, "Hello World")
+
+	cell2 := row.Cells[1]
+	c.Assert(cell2.Type(), Equals, CellTypeNumeric)
+	intValue, _ := cell2.Int()
+	c.Assert(intValue, Equals, 12345)
+
+	cell3 := row.Cells[2]
+	c.Assert(cell3.Type(), Equals, CellTypeNumeric)
+	float, _ := cell3.Float()
+	c.Assert(float, Equals, 1.024)
+
+	cell4 := row.Cells[3]
+	c.Assert(cell4.Type(), Equals, CellTypeBool)
+	c.Assert(cell4.Bool(), Equals, true)
+
+	cell5 := row.Cells[4]
+	c.Assert(cell5.Type(), Equals, CellTypeFormula)
+	c.Assert(cell5.Formula(), Equals, "10+20")
+	c.Assert(cell5.Value, Equals, "30")
+
+	cell6 := row.Cells[5]
+	c.Assert(cell6.Type(), Equals, CellTypeError)
+	c.Assert(cell6.Formula(), Equals, "10/0")
+	c.Assert(cell6.Value, Equals, "#DIV/0!")
+}
+
+func (l *LibSuite) TestReadRowsFromSheetWithHiddenColumn(c *C) {
+	var sharedstringsXML = bytes.NewBufferString(`
+		<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+		<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+		    <si><t>This is a test.</t></si>
+		    <si><t>This should be invisible.</t></si>
+		</sst>`)
+	var sheetxml = bytes.NewBufferString(`
+		<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+		<worksheet xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:mv="urn:schemas-microsoft-com:mac:vml" xmlns:mx="http://schemas.microsoft.com/office/mac/excel/2008/main"
+		    xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main" xmlns:x14ac="http://schemas.microsoft.com/office/spreadsheetml/2009/9/ac" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"
+		    xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+			<sheetViews><sheetView workbookViewId="0"/>
+			</sheetViews>
+			<sheetFormatPr customHeight="1" defaultColWidth="14.43" defaultRowHeight="15.75"/>
+			<cols>
+				<col hidden="1" max="2" min="2"/>
+			</cols>
+		    <sheetData>
+		        <row r="1">
+		            <c r="A1" s="1" t="s"><v>0</v></c>
+		            <c r="B1" s="1" t="s"><v>1</v></c>
+		        </row>
+		    </sheetData><drawing r:id="rId1"/></worksheet>`)
+	worksheet := new(xlsxWorksheet)
+	err := xml.NewDecoder(sheetxml).Decode(worksheet)
+	c.Assert(err, IsNil)
+	sst := new(xlsxSST)
+	err = xml.NewDecoder(sharedstringsXML).Decode(sst)
+	c.Assert(err, IsNil)
+	file := new(File)
+	file.referenceTable = MakeSharedStringRefTable(sst)
+	sheet := new(Sheet)
+	rows, _, maxCols, maxRows := readRowsFromSheet(worksheet, file, sheet)
+	c.Assert(maxRows, Equals, 1)
+	c.Assert(maxCols, Equals, 2)
+	row := rows[0]
+	c.Assert(row.Sheet, Equals, sheet)
+	c.Assert(len(row.Cells), Equals, 2)
+
+	cell1 := row.Cells[0]
+	c.Assert(cell1.Type(), Equals, CellTypeString)
+	c.Assert(cell1.String(), Equals, "This is a test.")
+	c.Assert(cell1.Hidden, Equals, false)
+
+	cell2 := row.Cells[1]
+	c.Assert(cell2.Type(), Equals, CellTypeString)
+	c.Assert(cell2.String(), Equals, "This should be invisible.")
+	c.Assert(cell2.Hidden, Equals, true)
+}
+
+// When converting the xlsxRow to a Row we create a as many cells as we find.
+func (l *LibSuite) TestReadRowFromRaw(c *C) {
+	var rawRow xlsxRow
+	var cell xlsxC
+	var row *Row
+
+	rawRow = xlsxRow{}
+	cell = xlsxC{R: "A1"}
+	cell = xlsxC{R: "A2"}
+	rawRow.C = append(rawRow.C, cell)
+	sheet := new(Sheet)
+	row = makeRowFromRaw(rawRow, sheet)
+	c.Assert(row, NotNil)
+	c.Assert(row.Cells, HasLen, 1)
+	c.Assert(row.Sheet, Equals, sheet)
+}
+
+// When a cell claims it is at a position greater than its ordinal
+// position in the file we make up the missing cells.
+func (l *LibSuite) TestReadRowFromRawWithMissingCells(c *C) {
+	var rawRow xlsxRow
+	var cell xlsxC
+	var row *Row
+
+	rawRow = xlsxRow{}
+	cell = xlsxC{R: "A1"}
+	rawRow.C = append(rawRow.C, cell)
+	cell = xlsxC{R: "E1"}
+	rawRow.C = append(rawRow.C, cell)
+	sheet := new(Sheet)
+	row = makeRowFromRaw(rawRow, sheet)
+	c.Assert(row, NotNil)
+	c.Assert(row.Cells, HasLen, 5)
+	c.Assert(row.Sheet, Equals, sheet)
+}
+
+// We can cope with missing coordinate references
+func (l *LibSuite) TestReadRowFromRawWithPartialCoordinates(c *C) {
+	var rawRow xlsxRow
+	var cell xlsxC
+	var row *Row
+
+	rawRow = xlsxRow{}
+	cell = xlsxC{R: "A1"}
+	rawRow.C = append(rawRow.C, cell)
+	cell = xlsxC{}
+	rawRow.C = append(rawRow.C, cell)
+	cell = xlsxC{R: "Z:1"}
+	rawRow.C = append(rawRow.C, cell)
+	cell = xlsxC{}
+	rawRow.C = append(rawRow.C, cell)
+	sheet := new(Sheet)
+	row = makeRowFromRaw(rawRow, sheet)
+	c.Assert(row, NotNil)
+	c.Assert(row.Cells, HasLen, 27)
+	c.Assert(row.Sheet, Equals, sheet)
+}
+
+func (l *LibSuite) TestSharedFormulas(c *C) {
+	var sheetxml = bytes.NewBufferString(`
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+           xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <dimension ref="A1:C2"/>
+  <sheetViews>
+    <sheetView tabSelected="1" workbookViewId="0">
+      <selection activeCell="C1" sqref="C1"/>
+    </sheetView>
+  </sheetViews>
+  <sheetFormatPr baseColWidth="10" defaultRowHeight="15"/>
+  <sheetData>
+    <row r="1" spans="1:3">
+      <c r="A1">
+        <v>1</v>
+      </c>
+      <c r="B1">
+        <v>2</v>
+      </c>
+      <c r="C1">
+        <v>3</v>
+      </c>
+    </row>
+    <row r="2" spans="1:3">
+      <c r="A2">
+        <v>2</v>
+		<f t="shared" ref="A2:C2" si="0">2*A1</f>
+      </c>
+      <c r="B2">
+        <v>4</v>
+		<f t="shared" si="0"/>
+      </c>
+      <c r="C2">
+        <v>6</v>
+		<f t="shared" si="0"/>
+      </c>
+    </row>
+  </sheetData>
+  <pageMargins left="0.7" right="0.7"
+               top="0.78740157499999996"
+               bottom="0.78740157499999996"
+               header="0.3"
+               footer="0.3"/>
+</worksheet>`)
+
+	worksheet := new(xlsxWorksheet)
+	err := xml.NewDecoder(sheetxml).Decode(worksheet)
+	c.Assert(err, IsNil)
+
+	file := new(File)
+	sheet := new(Sheet)
+	rows, _, maxCols, maxRows := readRowsFromSheet(worksheet, file, sheet)
+	c.Assert(maxCols, Equals, 3)
+	c.Assert(maxRows, Equals, 2)
+
+	row := rows[1]
+	c.Assert(row.Cells[1].Formula(), Equals, "2*B1")
+	c.Assert(row.Cells[2].Formula(), Equals, "2*C1")
+}
+
+// Avoid panic when cell.F.T is "e" (for error)
+func (l *LibSuite) TestFormulaForCellPanic(c *C) {
+	cell := xlsxC{R: "A1"}
+	// This line would panic before the fix.
+	sharedFormulas := make(map[int]sharedFormula)
+
+	// Not really an important test; getting here without a
+	// panic is the real win.
+	c.Assert(formulaForCell(cell, sharedFormulas), Equals, "")
 }

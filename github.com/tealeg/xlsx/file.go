@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // File is a high level structure providing a slice of Sheet structs
@@ -18,6 +19,7 @@ type File struct {
 	styles         *xlsxStyleSheet
 	Sheets         []*Sheet
 	Sheet          map[string]*Sheet
+	theme          *theme
 }
 
 // Create a new File
@@ -110,7 +112,10 @@ func (f *File) Write(writer io.Writer) (err error) {
 
 // Add a new Sheet, with the provided name, to a File
 func (f *File) AddSheet(sheetName string) (sheet *Sheet) {
-	sheet = &Sheet{Name: sheetName, File: *f}
+	sheet = &Sheet{Name: sheetName, File: f}
+	if len(f.Sheets) == 0 {
+		sheet.Selected = true
+	}
 	f.Sheet[sheetName] = sheet
 	f.Sheets = append(f.Sheets, sheet)
 	return sheet
@@ -146,6 +151,24 @@ func (f *File) makeWorkbook() xlsxWorkbook {
 	return workbook
 }
 
+// Some tools that read XLSX files have very strict requirements about
+// the structure of the input XML.  In particular both Numbers on the Mac
+// and SAS dislike inline XML namespace declarations, or namespace
+// prefixes that don't match the ones that Excel itself uses.  This is a
+// problem because the Go XML library doesn't multiple namespace
+// declarations in a single element of a document.  This function is a
+// horrible hack to fix that after the XML marshalling is completed.
+func replaceRelationshipsNameSpace(workbookMarshal string) string {
+	newWorkbook := strings.Replace(workbookMarshal, `xmlns:relationships="http://schemas.openxmlformats.org/officeDocument/2006/relationships" relationships:id`, `r:id`, -1)
+	// Dirty hack to fix issues #63 and #91; encoding/xml currently
+	// "doesn't allow for additional namespaces to be defined in the
+	// root element of the document," as described by @tealeg in the
+	// comments for #63.
+	oldXmlns := `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`
+	newXmlns := `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`
+	return strings.Replace(newWorkbook, oldXmlns, newXmlns, 1)
+}
+
 // Construct a map of file name to XML content representing the file
 // in terms of the structure of an XLSX file.
 func (f *File) MarshallParts() (map[string]string, error) {
@@ -170,7 +193,7 @@ func (f *File) MarshallParts() (map[string]string, error) {
 	sheetIndex := 1
 
 	if f.styles == nil {
-		f.styles = &xlsxStyleSheet{}
+		f.styles = newXlsxStyleSheet(f.theme)
 	}
 	f.styles.reset()
 	for _, sheet := range f.Sheets {
@@ -197,7 +220,12 @@ func (f *File) MarshallParts() (map[string]string, error) {
 		sheetIndex++
 	}
 
-	parts["xl/workbook.xml"], err = marshal(workbook)
+	workbookMarshal, err := marshal(workbook)
+	if err != nil {
+		return parts, err
+	}
+	workbookMarshal = replaceRelationshipsNameSpace(workbookMarshal)
+	parts["xl/workbook.xml"] = workbookMarshal
 	if err != nil {
 		return parts, err
 	}
