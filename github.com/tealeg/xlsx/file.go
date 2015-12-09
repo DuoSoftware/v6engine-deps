@@ -2,6 +2,7 @@ package xlsx
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -39,6 +40,26 @@ func OpenFile(filename string) (file *File, err error) {
 		return nil, err
 	}
 	file, err = ReadZip(f)
+	return
+}
+
+// OpenBinary() take bytes of an XLSX file and returns a populated
+// xlsx.File struct for it.
+func OpenBinary(bs []byte) (file *File, err error) {
+	r := bytes.NewReader(bs)
+	file, err = OpenReaderAt(r, int64(r.Len()))
+	return
+}
+
+// OpenReaderAt() take io.ReaderAt of an XLSX file and returns a populated
+// xlsx.File struct for it.
+func OpenReaderAt(r io.ReaderAt, size int64) (file *File, err error) {
+	var f *zip.Reader
+	f, err = zip.NewReader(r, size)
+	if err != nil {
+		return nil, err
+	}
+	file, err = ReadZipReader(f)
 	return
 }
 
@@ -111,14 +132,17 @@ func (f *File) Write(writer io.Writer) (err error) {
 }
 
 // Add a new Sheet, with the provided name, to a File
-func (f *File) AddSheet(sheetName string) (sheet *Sheet) {
+func (f *File) AddSheet(sheetName string) (sheet *Sheet, err error) {
+	if _, exists := f.Sheet[sheetName]; exists {
+		return nil, fmt.Errorf("Duplicate sheet name '%s'.", sheetName)
+	}
 	sheet = &Sheet{Name: sheetName, File: f}
 	if len(f.Sheets) == 0 {
 		sheet.Selected = true
 	}
 	f.Sheet[sheetName] = sheet
 	f.Sheets = append(f.Sheets, sheet)
-	return sheet
+	return sheet, nil
 }
 
 func (f *File) makeWorkbook() xlsxWorkbook {
