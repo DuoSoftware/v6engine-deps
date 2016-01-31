@@ -21,6 +21,7 @@ func TestAggregateDsl(t *testing.T) {
 	global := Aggregate("global").Global()
 	missing := Aggregate("missing_price").Missing("price")
 	terms := Aggregate("terms_price").Terms("price")
+	termsSize := Aggregate("terms_price_size").TermsWithSize("price", 0)
 	significantTerms := Aggregate("significant_terms_price").SignificantTerms("price")
 	histogram := Aggregate("histogram_price").Histogram("price", 50)
 
@@ -38,6 +39,7 @@ func TestAggregateDsl(t *testing.T) {
 		global,
 		missing,
 		terms,
+		termsSize,
 		significantTerms,
 		histogram,
 	)
@@ -97,6 +99,9 @@ func TestAggregateDsl(t *testing.T) {
 						"terms_price":{
 							"terms": { "field": "price" }
 						},
+						"terms_price_size":{
+							"terms": { "field": "price", "size": 0 }
+						},
 						"significant_terms_price":{
 							"significant_terms": { "field": "price" }
 						},
@@ -116,7 +121,7 @@ func TestAggregateFilter(t *testing.T) {
 	avg := Aggregate("avg_price").Avg("price")
 
 	dateAgg := Aggregate("in_stock_products").Filter(
-		Range().Field("stock").Gt(0),
+		Filter().Range("stock", nil, 0, nil, nil, ""),
 	)
 
 	dateAgg.Aggregates(
