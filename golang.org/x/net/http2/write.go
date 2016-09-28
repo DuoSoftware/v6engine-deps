@@ -23,11 +23,7 @@ type writeFramer interface {
 // frame writing scheduler (see writeScheduler in writesched.go).
 //
 // This interface is implemented by *serverConn.
-//
-// TODO: decide whether to a) use this in the client code (which didn't
-// end up using this yet, because it has a simpler design, not
-// currently implementing priorities), or b) delete this and
-// make the server code a bit more concrete.
+// TODO: use it from the client code too, once it exists.
 type writeContext interface {
 	Framer() *Framer
 	Flush() error
@@ -119,7 +115,6 @@ type writeResHeaders struct {
 	h           http.Header // may be nil
 	endStream   bool
 
-	date          string
 	contentType   string
 	contentLength string
 }
@@ -143,9 +138,6 @@ func (w *writeResHeaders) writeFrame(ctx writeContext) error {
 	}
 	if w.contentLength != "" {
 		enc.WriteField(hpack.HeaderField{Name: "content-length", Value: w.contentLength})
-	}
-	if w.date != "" {
-		enc.WriteField(hpack.HeaderField{Name: "date", Value: w.date})
 	}
 
 	headerBlock := buf.Bytes()

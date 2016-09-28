@@ -5,6 +5,7 @@
 package ipv6
 
 import (
+	"errors"
 	"fmt"
 	"net"
 )
@@ -36,7 +37,7 @@ func (h *Header) String() string {
 // ParseHeader parses b as an IPv6 base header.
 func ParseHeader(b []byte) (*Header, error) {
 	if len(b) < HeaderLen {
-		return nil, errHeaderTooShort
+		return nil, errors.New("header too short")
 	}
 	h := &Header{
 		Version:      int(b[0]) >> 4,

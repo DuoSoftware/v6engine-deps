@@ -5,19 +5,13 @@
 package http2
 
 import (
-	"crypto/tls"
 	"flag"
-	"fmt"
 	"io"
 	"io/ioutil"
-	"math/rand"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"reflect"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -25,17 +19,17 @@ import (
 var (
 	extNet        = flag.Bool("extnet", false, "do external network tests")
 	transportHost = flag.String("transporthost", "http2.golang.org", "hostname to use for TestTransport")
-	insecure      = flag.Bool("insecure", false, "insecure TLS dials") // TODO: dead code. remove?
+	insecure      = flag.Bool("insecure", false, "insecure TLS dials")
 )
-
-var tlsConfigInsecure = &tls.Config{InsecureSkipVerify: true}
 
 func TestTransportExternal(t *testing.T) {
 	if !*extNet {
 		t.Skip("skipping external network test")
 	}
 	req, _ := http.NewRequest("GET", "https://"+*transportHost+"/", nil)
-	rt := &Transport{TLSClientConfig: tlsConfigInsecure}
+	rt := &Transport{
+		InsecureTLSDial: *insecure,
+	}
 	res, err := rt.RoundTrip(req)
 	if err != nil {
 		t.Fatalf("%v", err)
@@ -50,7 +44,7 @@ func TestTransport(t *testing.T) {
 	}, optOnlyServer)
 	defer st.Close()
 
-	tr := &Transport{TLSClientConfig: tlsConfigInsecure}
+	tr := &Transport{InsecureTLSDial: true}
 	defer tr.CloseIdleConnections()
 
 	req, err := http.NewRequest("GET", st.ts.URL, nil)
@@ -73,9 +67,7 @@ func TestTransport(t *testing.T) {
 	wantHeader := http.Header{
 		"Content-Length": []string{"3"},
 		"Content-Type":   []string{"text/plain; charset=utf-8"},
-		"Date":           []string{"XXX"}, // see cleanDate
 	}
-	cleanDate(res)
 	if !reflect.DeepEqual(res.Header, wantHeader) {
 		t.Errorf("res Header = %v; want %v", res.Header, wantHeader)
 	}
@@ -99,7 +91,7 @@ func TestTransportReusesConns(t *testing.T) {
 		io.WriteString(w, r.RemoteAddr)
 	}, optOnlyServer)
 	defer st.Close()
-	tr := &Transport{TLSClientConfig: tlsConfigInsecure}
+	tr := &Transport{InsecureTLSDial: true}
 	defer tr.CloseIdleConnections()
 	get := func() string {
 		req, err := http.NewRequest("GET", st.ts.URL, nil)
@@ -144,7 +136,9 @@ func TestTransportAbortClosesPipes(t *testing.T) {
 	requestMade := make(chan struct{})
 	go func() {
 		defer close(done)
-		tr := &Transport{TLSClientConfig: tlsConfigInsecure}
+		tr := &Transport{
+			InsecureTLSDial: true,
+		}
 		req, err := http.NewRequest("GET", st.ts.URL, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -169,209 +163,5 @@ func TestTransportAbortClosesPipes(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("timeout")
-	}
-}
-
-// TODO: merge this with TestTransportBody to make TestTransportRequest? This
-// could be a table-driven test with extra goodies.
-func TestTransportPath(t *testing.T) {
-	gotc := make(chan *url.URL, 1)
-	st := newServerTester(t,
-		func(w http.ResponseWriter, r *http.Request) {
-			gotc <- r.URL
-		},
-		optOnlyServer,
-	)
-	defer st.Close()
-
-	tr := &Transport{TLSClientConfig: tlsConfigInsecure}
-	defer tr.CloseIdleConnections()
-	const (
-		path  = "/testpath"
-		query = "q=1"
-	)
-	surl := st.ts.URL + path + "?" + query
-	req, err := http.NewRequest("POST", surl, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	c := &http.Client{Transport: tr}
-	res, err := c.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	got := <-gotc
-	if got.Path != path {
-		t.Errorf("Read Path = %q; want %q", got.Path, path)
-	}
-	if got.RawQuery != query {
-		t.Errorf("Read RawQuery = %q; want %q", got.RawQuery, query)
-	}
-}
-
-func randString(n int) string {
-	rnd := rand.New(rand.NewSource(int64(n)))
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = byte(rnd.Intn(256))
-	}
-	return string(b)
-}
-
-var bodyTests = []struct {
-	body         string
-	noContentLen bool
-}{
-	{body: "some message"},
-	{body: "some message", noContentLen: true},
-	{body: ""},
-	{body: "", noContentLen: true},
-	{body: strings.Repeat("a", 1<<20), noContentLen: true},
-	{body: strings.Repeat("a", 1<<20)},
-	{body: randString(16<<10 - 1)},
-	{body: randString(16 << 10)},
-	{body: randString(16<<10 + 1)},
-	{body: randString(512<<10 - 1)},
-	{body: randString(512 << 10)},
-	{body: randString(512<<10 + 1)},
-	{body: randString(1<<20 - 1)},
-	{body: randString(1 << 20)},
-	{body: randString(1<<20 + 2)},
-}
-
-func TestTransportBody(t *testing.T) {
-	gotc := make(chan interface{}, 1)
-	st := newServerTester(t,
-		func(w http.ResponseWriter, r *http.Request) {
-			slurp, err := ioutil.ReadAll(r.Body)
-			if err != nil {
-				gotc <- err
-			} else {
-				gotc <- string(slurp)
-			}
-		},
-		optOnlyServer,
-	)
-	defer st.Close()
-
-	for i, tt := range bodyTests {
-		tr := &Transport{TLSClientConfig: tlsConfigInsecure}
-		defer tr.CloseIdleConnections()
-
-		var body io.Reader = strings.NewReader(tt.body)
-		if tt.noContentLen {
-			body = struct{ io.Reader }{body} // just a Reader, hiding concrete type and other methods
-		}
-		req, err := http.NewRequest("POST", st.ts.URL, body)
-		if err != nil {
-			t.Fatalf("#%d: %v", i, err)
-		}
-		c := &http.Client{Transport: tr}
-		res, err := c.Do(req)
-		if err != nil {
-			t.Fatalf("#%d: %v", i, err)
-		}
-		defer res.Body.Close()
-		got := <-gotc
-		if err, ok := got.(error); ok {
-			t.Fatalf("#%d: %v", i, err)
-		} else if got.(string) != tt.body {
-			got := got.(string)
-			t.Errorf("#%d: Read body mismatch.\n got: %q (len %d)\nwant: %q (len %d)", i, shortString(got), len(got), shortString(tt.body), len(tt.body))
-		}
-	}
-}
-
-func shortString(v string) string {
-	const maxLen = 100
-	if len(v) <= maxLen {
-		return v
-	}
-	return fmt.Sprintf("%v[...%d bytes omitted...]%v", v[:maxLen/2], len(v)-maxLen, v[len(v)-maxLen/2:])
-}
-
-func TestTransportDialTLS(t *testing.T) {
-	var mu sync.Mutex // guards following
-	var gotReq, didDial bool
-
-	ts := newServerTester(t,
-		func(w http.ResponseWriter, r *http.Request) {
-			mu.Lock()
-			gotReq = true
-			mu.Unlock()
-		},
-		optOnlyServer,
-	)
-	defer ts.Close()
-	tr := &Transport{
-		DialTLS: func(netw, addr string, cfg *tls.Config) (net.Conn, error) {
-			mu.Lock()
-			didDial = true
-			mu.Unlock()
-			cfg.InsecureSkipVerify = true
-			c, err := tls.Dial(netw, addr, cfg)
-			if err != nil {
-				return nil, err
-			}
-			return c, c.Handshake()
-		},
-	}
-	defer tr.CloseIdleConnections()
-	client := &http.Client{Transport: tr}
-	res, err := client.Get(ts.ts.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res.Body.Close()
-	mu.Lock()
-	if !gotReq {
-		t.Error("didn't get request")
-	}
-	if !didDial {
-		t.Error("didn't use dial hook")
-	}
-}
-
-func TestConfigureTransport(t *testing.T) {
-	t1 := &http.Transport{}
-	err := ConfigureTransport(t1)
-	if err == errTransportVersion {
-		t.Skip(err)
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := fmt.Sprintf("%#v", *t1); !strings.Contains(got, `"h2"`) {
-		// Laziness, to avoid buildtags.
-		t.Errorf("stringification of HTTP/1 transport didn't contain \"h2\": %v", got)
-	}
-	if t1.TLSClientConfig == nil {
-		t.Errorf("nil t1.TLSClientConfig")
-	} else if !reflect.DeepEqual(t1.TLSClientConfig.NextProtos, []string{"h2"}) {
-		t.Errorf("TLSClientConfig.NextProtos = %q; want just 'h2'", t1.TLSClientConfig.NextProtos)
-	}
-	if err := ConfigureTransport(t1); err == nil {
-		t.Error("unexpected success on second call to ConfigureTransport")
-	}
-
-	// And does it work?
-	st := newServerTester(t, func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, r.Proto)
-	}, optOnlyServer)
-	defer st.Close()
-
-	t1.TLSClientConfig.InsecureSkipVerify = true
-	c := &http.Client{Transport: t1}
-	res, err := c.Get(st.ts.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	slurp, err := ioutil.ReadAll(res.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := string(slurp), "HTTP/2.0"; got != want {
-		t.Errorf("body = %q; want %q", got, want)
 	}
 }

@@ -356,10 +356,10 @@ var eTLDPlusOneTestCases = []struct {
 	{"a.b.example.uk.com", "example.uk.com"},
 	{"test.ac", "test.ac"},
 	// TLD with only 1 (wildcard) rule.
-	{"mm", ""},
-	{"c.mm", ""},
-	{"b.c.mm", "b.c.mm"},
-	{"a.b.c.mm", "b.c.mm"},
+	{"il", ""},
+	{"c.il", ""},
+	{"b.c.il", "b.c.il"},
+	{"a.b.c.il", "b.c.il"},
 	// More complex TLD.
 	{"jp", ""},
 	{"test.jp", "test.jp"},
