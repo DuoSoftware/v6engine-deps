@@ -65,6 +65,7 @@ const (
 var (
 	errClientDisconnected = errors.New("client disconnected")
 	errClosedBody         = errors.New("body closed by handler")
+	errHandlerComplete    = errors.New("http2: request body closed due to handler exiting")
 	errStreamClosed       = errors.New("http2: stream closed")
 )
 
@@ -728,26 +729,28 @@ var errChanPool = sync.Pool{
 	New: func() interface{} { return make(chan error, 1) },
 }
 
-// writeDataFromHandler writes the data described in req to stream.id.
-//
-// The flow control currently happens in the Handler where it waits
-// for 1 or more bytes to be available to then write here.  So at this
-// point we know that we have flow control. But this might have to
-// change when priority is implemented, so the serve goroutine knows
-// the total amount of bytes waiting to be sent and can can have more
-// scheduling decisions available.
-func (sc *serverConn) writeDataFromHandler(stream *stream, writeData *writeData) error {
+var writeDataPool = sync.Pool{
+	New: func() interface{} { return new(writeData) },
+}
+
+// writeDataFromHandler writes DATA response frames from a handler on
+// the given stream.
+func (sc *serverConn) writeDataFromHandler(stream *stream, data []byte, endStream bool) error {
 	ch := errChanPool.Get().(chan error)
+	writeArg := writeDataPool.Get().(*writeData)
+	*writeArg = writeData{stream.id, data, endStream}
 	err := sc.writeFrameFromHandler(frameWriteMsg{
-		write:  writeData,
+		write:  writeArg,
 		stream: stream,
 		done:   ch,
 	})
 	if err != nil {
 		return err
 	}
+	var frameWriteDone bool // the frame write is done (successfully or not)
 	select {
 	case err = <-ch:
+		frameWriteDone = true
 	case <-sc.doneServing:
 		return errClientDisconnected
 	case <-stream.cw:
@@ -760,11 +763,15 @@ func (sc *serverConn) writeDataFromHandler(stream *stream, writeData *writeData)
 		// close.
 		select {
 		case err = <-ch:
+			frameWriteDone = true
 		default:
 			return errStreamClosed
 		}
 	}
 	errChanPool.Put(ch)
+	if frameWriteDone {
+		writeDataPool.Put(writeArg)
+	}
 	return err
 }
 
@@ -872,7 +879,7 @@ func (sc *serverConn) wroteFrame(res frameWriteResult) {
 			errCancel := StreamError{st.id, ErrCodeCancel}
 			sc.resetStream(errCancel)
 		case stateHalfClosedRemote:
-			sc.closeStream(st, nil)
+			sc.closeStream(st, errHandlerComplete)
 		}
 	}
 
@@ -1069,7 +1076,7 @@ func (sc *serverConn) processFrame(f Frame) error {
 
 func (sc *serverConn) processPing(f *PingFrame) error {
 	sc.serveG.check()
-	if f.Flags.Has(FlagSettingsAck) {
+	if f.IsAck() {
 		// 6.7 PING: " An endpoint MUST NOT respond to PING frames
 		// containing this flag."
 		return nil
@@ -1142,7 +1149,7 @@ func (sc *serverConn) closeStream(st *stream, err error) {
 	}
 	delete(sc.streams, st.id)
 	if p := st.body; p != nil {
-		p.Close(err)
+		p.CloseWithError(err)
 	}
 	st.cw.Close() // signals Handler's CloseNotifier, unblocks writes, etc
 	sc.writeSched.forgetStream(st.id)
@@ -1246,7 +1253,7 @@ func (sc *serverConn) processData(f *DataFrame) error {
 
 	// Sender sending more than they'd declared?
 	if st.declBodyBytes != -1 && st.bodyBytes+int64(len(data)) > st.declBodyBytes {
-		st.body.Close(fmt.Errorf("sender tried to send more than declared Content-Length of %d bytes", st.declBodyBytes))
+		st.body.CloseWithError(fmt.Errorf("sender tried to send more than declared Content-Length of %d bytes", st.declBodyBytes))
 		return StreamError{id, ErrCodeStreamClosed}
 	}
 	if len(data) > 0 {
@@ -1266,10 +1273,10 @@ func (sc *serverConn) processData(f *DataFrame) error {
 	}
 	if f.StreamEnded() {
 		if st.declBodyBytes != -1 && st.declBodyBytes != st.bodyBytes {
-			st.body.Close(fmt.Errorf("request declared a Content-Length of %d but only wrote %d bytes",
+			st.body.CloseWithError(fmt.Errorf("request declared a Content-Length of %d but only wrote %d bytes",
 				st.declBodyBytes, st.bodyBytes))
 		} else {
-			st.body.Close(io.EOF)
+			st.body.CloseWithError(io.EOF)
 		}
 		st.state = stateHalfClosedRemote
 	}
@@ -1450,6 +1457,11 @@ func (sc *serverConn) newWriterAndRequest() (*responseWriter, *http.Request, err
 		// pseudo-header fields"
 		return nil, nil, StreamError{rp.stream.id, ErrCodeProtocol}
 	}
+	bodyOpen := rp.stream.state == stateOpen
+	if rp.method == "HEAD" && bodyOpen {
+		// HEAD requests can't have bodies
+		return nil, nil, StreamError{rp.stream.id, ErrCodeProtocol}
+	}
 	var tlsState *tls.ConnectionState // nil if not scheme https
 	if rp.scheme == "https" {
 		tlsState = sc.tlsState
@@ -1466,7 +1478,6 @@ func (sc *serverConn) newWriterAndRequest() (*responseWriter, *http.Request, err
 	if cookies := rp.header["Cookie"]; len(cookies) > 1 {
 		rp.header.Set("Cookie", strings.Join(cookies, "; "))
 	}
-	bodyOpen := rp.stream.state == stateOpen
 	body := &requestBody{
 		conn:          sc,
 		stream:        rp.stream,
@@ -1493,9 +1504,8 @@ func (sc *serverConn) newWriterAndRequest() (*responseWriter, *http.Request, err
 	}
 	if bodyOpen {
 		body.pipe = &pipe{
-			b: buffer{buf: make([]byte, initialWindowSize)}, // TODO: share/remove XXX
+			b: &fixedBuffer{buf: make([]byte, initialWindowSize)}, // TODO: share/remove XXX
 		}
-		body.pipe.c.L = &body.pipe.m
 
 		if vv, ok := rp.header["Content-Length"]; ok {
 			req.ContentLength, _ = strconv.ParseInt(vv[0], 10, 64)
@@ -1588,7 +1598,10 @@ type bodyReadMsg struct {
 // and schedules flow control tokens to be sent.
 func (sc *serverConn) noteBodyReadFromHandler(st *stream, n int) {
 	sc.serveG.checkNotOn() // NOT on
-	sc.bodyReadCh <- bodyReadMsg{st, n}
+	select {
+	case sc.bodyReadCh <- bodyReadMsg{st, n}:
+	case <-sc.doneServing:
+	}
 }
 
 func (sc *serverConn) noteBodyRead(st *stream, n int) {
@@ -1655,7 +1668,7 @@ type requestBody struct {
 
 func (b *requestBody) Close() error {
 	if b.pipe != nil {
-		b.pipe.Close(errClosedBody)
+		b.pipe.CloseWithError(errClosedBody)
 	}
 	b.closed = true
 	return nil
@@ -1710,7 +1723,9 @@ type responseWriterState struct {
 	wroteHeader   bool        // WriteHeader called (explicitly or implicitly). Not necessarily sent to user yet.
 	sentHeader    bool        // have we sent the header frame?
 	handlerDone   bool        // handler has finished
-	curWrite      writeData
+
+	sentContentLen int64 // non-zero if handler set a Content-Length header
+	wroteBytes     int64
 
 	closeNotifierMu sync.Mutex // guards closeNotifierCh
 	closeNotifierCh chan bool  // nil until first used
@@ -1730,16 +1745,31 @@ func (rws *responseWriterState) writeChunk(p []byte) (n int, err error) {
 	if !rws.wroteHeader {
 		rws.writeHeader(200)
 	}
+	isHeadResp := rws.req.Method == "HEAD"
 	if !rws.sentHeader {
 		rws.sentHeader = true
-		var ctype, clen string // implicit ones, if we can calculate it
-		if rws.handlerDone && rws.snapHeader.Get("Content-Length") == "" {
+		var ctype, clen string
+		if clen = rws.snapHeader.Get("Content-Length"); clen != "" {
+			rws.snapHeader.Del("Content-Length")
+			clen64, err := strconv.ParseInt(clen, 10, 64)
+			if err == nil && clen64 >= 0 {
+				rws.sentContentLen = clen64
+			} else {
+				clen = ""
+			}
+		}
+		if clen == "" && rws.handlerDone && bodyAllowedForStatus(rws.status) {
 			clen = strconv.Itoa(len(p))
 		}
-		if rws.snapHeader.Get("Content-Type") == "" {
+		if rws.snapHeader.Get("Content-Type") == "" && bodyAllowedForStatus(rws.status) {
 			ctype = http.DetectContentType(p)
 		}
-		endStream := rws.handlerDone && len(p) == 0
+		var date string
+		if _, ok := rws.snapHeader["Date"]; !ok {
+			// TODO(bradfitz): be faster here, like net/http? measure.
+			date = time.Now().UTC().Format(http.TimeFormat)
+		}
+		endStream := (rws.handlerDone && len(p) == 0) || isHeadResp
 		err = rws.conn.writeHeaders(rws.stream, &writeResHeaders{
 			streamID:      rws.stream.id,
 			httpResCode:   rws.status,
@@ -1747,6 +1777,7 @@ func (rws *responseWriterState) writeChunk(p []byte) (n int, err error) {
 			endStream:     endStream,
 			contentType:   ctype,
 			contentLength: clen,
+			date:          date,
 		})
 		if err != nil {
 			return 0, err
@@ -1755,18 +1786,14 @@ func (rws *responseWriterState) writeChunk(p []byte) (n int, err error) {
 			return 0, nil
 		}
 	}
+	if isHeadResp {
+		return len(p), nil
+	}
 	if len(p) == 0 && !rws.handlerDone {
 		return 0, nil
 	}
 
-	// Reuse curWrite (which as a pointer fits into the
-	// 'writeFramer' interface value) for each write to avoid an
-	// allocation per write.
-	curWrite := &rws.curWrite
-	curWrite.streamID = rws.stream.id
-	curWrite.p = p
-	curWrite.endStream = rws.handlerDone
-	if err := rws.conn.writeDataFromHandler(rws.stream, curWrite); err != nil {
+	if err := rws.conn.writeDataFromHandler(rws.stream, p, rws.handlerDone); err != nil {
 		return 0, err
 	}
 	return len(p), nil
@@ -1874,6 +1901,15 @@ func (w *responseWriter) write(lenData int, dataB []byte, dataS string) (n int, 
 	if !rws.wroteHeader {
 		w.WriteHeader(200)
 	}
+	if !bodyAllowedForStatus(rws.status) {
+		return 0, http.ErrBodyNotAllowed
+	}
+	rws.wroteBytes += int64(len(dataB)) + int64(len(dataS)) // only one can be set
+	if rws.sentContentLen != 0 && rws.wroteBytes > rws.sentContentLen {
+		// TODO: send a RST_STREAM
+		return 0, errors.New("http2: handler wrote more than declared Content-Length")
+	}
+
 	if dataB != nil {
 		return rws.bw.Write(dataB)
 	} else {
