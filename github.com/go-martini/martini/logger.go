@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+var IsOSLogEnabled bool
+
 // Logger returns a middleware handler that logs the request as it goes in and the response as it goes out.
 func Logger() Handler {
 	return func(res http.ResponseWriter, req *http.Request, c Context, log *log.Logger) {
@@ -18,12 +20,14 @@ func Logger() Handler {
 				addr = req.RemoteAddr
 			}
 		}
-
-		log.Printf("Started %s %s for %s", req.Method, req.URL.Path, addr)
+		if IsOSLogEnabled {
+			log.Printf("Started %s %s for %s", req.Method, req.URL.Path, addr)
+		}
 
 		rw := res.(ResponseWriter)
 		c.Next()
-
-		log.Printf("Completed %v %s in %v\n", rw.Status(), http.StatusText(rw.Status()), time.Since(start))
+		if IsOSLogEnabled {
+			log.Printf("Completed %v %s in %v\n", rw.Status(), http.StatusText(rw.Status()), time.Since(start))
+		}
 	}
 }
