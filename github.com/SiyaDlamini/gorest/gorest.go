@@ -185,6 +185,10 @@ func RegisterServiceOnPath(root string, h interface{}) {
 
 //ServeHTTP dispatches the request to the handler whose pattern most closely matches the request URL.
 func (_ manager) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+	w.Header().Set("Access-Control-Allow-Headers",
+		"Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, SecurityToken, Tenant, studio.crowd.tokenkey, JSESSIONID, atlassian.xsrf.token, cloud.session.token, Invitetype, Nonce")
+
 	if origin := r.Header.Get("Origin"); origin != "" {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
